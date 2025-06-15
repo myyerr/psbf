@@ -2,212 +2,175 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\GameJoined;
 use App\Models\Game;
-use App\Models\GameMove;
-use App\Models\User;
-use App\Events\GameInvite;
-use App\Events\GameStarted;
-use App\Events\GameMoveMade;
-use App\Events\GameEnded;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Gate;
+use App\Models\User; // Ditambahkan: Import model User
+use Illuminate\Support\Facades\DB; // Ditambahkan: Import facade DB untuk transaksi
+use App\Events\ChatMessageSent;
 
 class GameController extends Controller
 {
     /**
-     * Handle game invitation.
+     * Display a listing of the resource.
      */
-    public function invite(Request $request)
+    public function index (Request $request)
     {
-        $request->validate([
-            'user_id' => 'required|exists:users,id|different:me',
-        ], [
-            'user_id.different' => 'Anda tidak bisa mengajak diri sendiri bermain.',
+        return inertia('Dashboard', [
+            'games' => Game::with('playerOne')
+                //->whereNull('player_two_id')
+                //->where('player_one_id', '!=', $request->user()->id)
+                ->where('status', false)
+                ->oldest()
+                ->simplePaginate(100)
         ]);
-
-        $fromUser = Auth::user();
-        $toUser = User::findOrFail($request->user_id);
-
-        // Pastikan tidak ada game aktif antara kedua pemain
-        $existingGame = Game::where(function ($query) use ($fromUser, $toUser) {
-            $query->where('player_x_id', $fromUser->id)
-                  ->where('player_o_id', $toUser->id);
-        })->orWhere(function ($query) use ($fromUser, $toUser) {
-            $query->where('player_x_id', $toUser->id)
-                  ->where('player_o_id', $fromUser->id);
-        })->where('status', 'playing')
-          ->orWhere('status', 'pending')
-          ->first();
-
-        if ($existingGame) {
-            return response()->json(['message' => 'Sudah ada game aktif atau undangan tertunda dengan user ini.'], 409);
-        }
-
-        GameInvite::dispatch($fromUser, $toUser);
-
-        return response()->json(['message' => 'Undangan game terkirim!']);
     }
 
     /**
-     * Accept a game invitation and start the game.
+     * Show the form for creating a new resource.
      */
-    public function acceptInvite(Request $request)
+    public function create ()
     {
-        $request->validate([
-            'from_user_id' => 'required|exists:users,id',
-        ]);
-
-        $inviter = User::findOrFail($request->from_user_id);
-        $acceptor = Auth::user();
-
-        // Buat game baru
-        $game = Game::create([
-            'player_x_id' => $inviter->id, // Inviter jadi X
-            'player_o_id' => $acceptor->id, // Acceptor jadi O
-            'status' => 'playing',
-            'current_turn_user_id' => $inviter->id, // X mulai duluan
-        ]);
-
-        GameStarted::dispatch($game);
-
-        return response()->json(['message' => 'Game dimulai!', 'game_id' => $game->id]);
+        //
     }
 
     /**
-     * Reject a game invitation (optional, could be implemented if needed).
+     * Store a newly created resource in storage.
      */
-    public function rejectInvite(Request $request)
+    public function store (Request $request)
     {
-        // Implementasi opsional jika Anda ingin fungsionalitas penolakan undangan
-        return response()->json(['message' => 'Undangan ditolak. (Fitur ini belum sepenuhnya diimplementasikan)']);
+        $game = Game::create(['player_one_id' => $request->user()->id]);
+
+        return to_route('games.show', $game);
     }
 
-    /**
-     * Handle a player making a move.
-     */
-    public function makeMove(Request $request, Game $game)
+    public function join (Request $request, Game $game)
     {
-        $user = Auth::user();
+        Gate::authorize('join', $game);
 
-        // Validasi giliran
-        if ($game->current_turn_user_id !== $user->id) {
-            throw ValidationException::withMessages(['turn' => 'Bukan giliran Anda.']);
+        if ($game->player_one_id === $request->user()->id || $game->player_two_id === $request->user()->id) {
+            GameJoined::dispatch($game);
+            return to_route('games.show', $game);
         }
 
-        // Validasi status game
-        if ($game->status !== 'playing') {
-            throw ValidationException::withMessages(['game' => 'Game tidak dalam status bermain.']);
-        }
-
-        $request->validate([
-            'position' => 'required|integer|min:0|max:8',
-        ]);
-
-        $board = $this->getBoardState($game);
-
-        // Validasi posisi kosong
-        if ($board[$request->position] !== null) {
-            throw ValidationException::withMessages(['position' => 'Posisi ini sudah terisi.']);
-        }
-
-        $playerMark = ($user->id === $game->player_x_id) ? 'X' : 'O';
-
-        // Simpan move
-        $move = GameMove::create([
-            'game_id' => $game->id,
-            'user_id' => $user->id,
-            'position' => $request->position,
-            'player_mark' => $playerMark,
-        ]);
-
-        // Update board state
-        $board[$request->position] = $playerMark;
-
-        // Cek pemenang atau seri
-        $winner = $this->checkWinner($board);
-        $isDraw = $this->checkDraw($board);
-
-        if ($winner) {
-            $game->status = 'finished';
-            $game->winner_id = $user->id;
-            $game->save();
-            GameEnded::dispatch($game, $user->name, false);
-        } elseif ($isDraw) {
-            $game->status = 'finished';
-            $game->save();
-            GameEnded::dispatch($game, null, true);
+        if ($game->player_one_id === null) {
+            $game->update(['player_one_id' => $request->user()->id]);
+        } elseif ($game->player_two_id === null) {
+            $game->update(['player_two_id' => $request->user()->id]);
         } else {
-            // Ganti giliran
-            $game->current_turn_user_id = ($user->id === $game->player_x_id) ? $game->player_o_id : $game->player_x_id;
-            $game->save();
+            return back()->withErrors(['msg' => 'Jogo já possui dois jogadores.']);
         }
 
-        GameMoveMade::dispatch($game, $move, $board);
+        GameJoined::dispatch($game);
 
-        return response()->json(['message' => 'Langkah berhasil!', 'game' => $game->load('playerX', 'playerO', 'currentTurnUser')]);
+        return to_route('games.show', $game);
     }
 
-    /**
-     * Get the current state of the game board.
-     */
-    private function getBoardState(Game $game)
+    public function updateStatus (Request $request, Game $game)
     {
-        $board = array_fill(0, 9, null); // Inisialisasi papan 3x3 dengan null
+        $validated = $request->validate([
+            'gameId' => 'required|exists:games,id',
+            'playerWonId' => 'nullable|exists:users,id',
+            'winningLine' => 'nullable|int'
+        ]);
 
-        foreach ($game->moves()->orderBy('id')->get() as $move) {
-            $board[$move->position] = $move->player_mark;
+        // Ditambahkan: Cek apakah game sudah selesai sebelumnya untuk mencegah update berulang
+        if ($game->status) {
+            return to_route('games.show', $game);
         }
 
-        return $board;
-    }
+        // Ditambahkan: Gunakan transaksi database untuk memastikan update atomik
+        DB::transaction(function () use ($game, $validated) {
+            // Update status game di tabel games
+            $game->update([
+                'status' => true,
+                'winner_id' => $validated['playerWonId'],
+                'winning_line' => $validated['winningLine']
+            ]);
 
-    /**
-     * Check for a winner.
-     */
-    private function checkWinner(array $board)
-    {
-        $winningCombinations = [
-            [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
-            [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
-            [0, 4, 8], [2, 4, 6],             // Diagonals
-        ];
+            // Dapatkan ID pemain
+            $playerOneId = $game->player_one_id;
+            $playerTwoId = $game->player_two_id;
 
-        foreach ($winningCombinations as $combination) {
-            $a = $board[$combination[0]];
-            $b = $board[$combination[1]];
-            $c = $board[$combination[2]];
+            // Logika untuk mengupdate skor pemain (wins/losses)
+            if ($validated['playerWonId']) {
+                // Jika ada pemenang
+                $winnerId = $validated['playerWonId'];
+                $loserId = null;
 
-            if ($a !== null && $a === $b && $b === $c) {
-                return $a; // 'X' or 'O'
+                if ($winnerId == $playerOneId) {
+                    $loserId = $playerTwoId;
+                } elseif ($winnerId == $playerTwoId) {
+                    $loserId = $playerOneId;
+                }
+
+                // Increment wins untuk pemenang
+                if ($winnerId) {
+                    User::where('id', $winnerId)->increment('wins');
+                }
+
+                // Increment losses untuk yang kalah
+                if ($loserId) {
+                    User::where('id', $loserId)->increment('losses');
+                }
+            } else {
+                // Jika game seri (stalemate) dan tidak ada playerWonId
+                // Jika Anda memiliki kolom 'draws' di tabel users, Anda bisa mengupdatenya di sini
+                // Contoh:
+                // if ($playerOneId) {
+                //     User::where('id', $playerOneId)->increment('draws');
+                // }
+                // if ($playerTwoId) {
+                //     User::where('id', $playerTwoId)->increment('draws');
+                // }
             }
-        }
-        return null;
+        }); // Akhir transaksi
+
+        return to_route('games.show', $game);
     }
 
     /**
-     * Check for a draw.
+     * Display the specified resource.
      */
-    private function checkDraw(array $board)
+    public function show (Game $game)
     {
-        if (in_array(null, $board)) {
-            return false; // Masih ada kotak kosong
-        }
-        return !$this->checkWinner($board); // Tidak ada pemenang dan semua kotak terisi
+        // Pastikan untuk me-load data playerOne dan playerTwo
+        // Karena kolom 'wins' dan 'losses' ada langsung di model User,
+        // Cukup load relasinya, Laravel akan menyertakan kolom tersebut secara otomatis.
+        $game->load('playerOne', 'playerTwo');
+
+        return inertia('Games/Show', compact('game'));
     }
 
     /**
-     * Show game board
+     * Show the form for editing the specified resource.
      */
-    public function showGame(Game $game)
+    public function edit (Game $game)
     {
-        // Pastikan user adalah salah satu pemain di game ini
-        if ($game->player_x_id !== Auth::id() && $game->player_o_id !== Auth::id()) {
-            abort(403, 'Anda tidak diizinkan mengakses game ini.');
-        }
+        //
+    }
 
-        $initialBoard = $this->getBoardState($game);
+    /**
+     * Update the specified resource in storage.
+     */
+    public function update (Request $request, Game $game)
+    {
+        $data = $request->validate([
+            'state' => ['required', 'array', 'size:9'],
+            'state.*' => ['integer', 'between:-1,1'],
+        ]);
 
-        return view('game', compact('game', 'initialBoard'));
+        $game->update($data);
+
+        return to_route('games.show', $game);
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     */
+    public function destroy (Game $game)
+    {
+        //
     }
 }

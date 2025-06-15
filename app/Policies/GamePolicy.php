@@ -1,0 +1,91 @@
+<?php
+
+namespace App\Policies;
+
+use App\Models\Game;
+use App\Models\User;
+use Illuminate\Auth\Access\Response;
+
+class GamePolicy
+{
+    /**
+     * Determine whether the user can view any models.
+     */
+    public function viewAny(User $user): bool
+    {
+        //
+    }
+
+    /**
+     * Determine whether the user can view the model.
+     */
+    public function view(User $user, Game $game): bool
+    {
+        //
+    }
+
+    /**
+     * Determine whether the user can create models.
+     */
+    public function create(User $user): bool
+    {
+        //
+    }
+
+    public function join (User $user, Game $game): bool
+    {
+        // If the user is already as player_one or player_two, do nothing and allow entry
+        if ($game->player_one_id === $user->id || $game->player_two_id === $user->id) {
+            return true;
+        }
+
+        // If there is an empty slot (null), place the user in it
+        if ($game->player_one_id === null) {
+            $game->player_one_id = $user->id;
+            $game->save();
+            return true;
+        } elseif ($game->player_two_id === null) {
+            $game->player_two_id = $user->id;
+            $game->save();
+            return true;
+        }
+
+        // If both slots are occupied by other players, deny entry
+        return false;
+
+        // Old code
+        //return $game->player_one_id !== $user->id && $game->player_two_id === null;
+    }
+
+    /**
+     * Determine whether the user can update the model.
+     */
+    public function update(User $user, Game $game): bool
+    {
+        //
+    }
+
+    /**
+     * Determine whether the user can delete the model.
+     */
+    public function delete(User $user, Game $game): bool
+    {
+        //
+    }
+
+    /**
+     * Determine whether the user can restore the model.
+     */
+    public function restore(User $user, Game $game): bool
+    {
+        //
+    }
+
+    /**
+     * Determine whether the user can permanently delete the model.
+     */
+    public function forceDelete(User $user, Game $game): bool
+    {
+        //
+    }
+}

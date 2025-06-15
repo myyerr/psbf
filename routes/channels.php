@@ -1,10 +1,21 @@
 <?php
 
-use Illuminate\Support\Facades\Broadcast;
+use App\Models\Game;
 use App\Models\User;
+use Illuminate\Support\Facades\Broadcast;
 
-Broadcast::channel('online-users', function ($user) {
-    dd(['user_status' => $user ? 'authenticated' : 'not_authenticated', 'user_id' => $user ? $user->id : null]);
+Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
+    return (int) $user->id === (int) $id;
 });
 
-// Hapus semua definisi channel lain untuk sementara, termasuk 'App.Models.User.{id}'
+Broadcast::channel('lobby', function (User $user) {
+    return true;
+});
+
+Broadcast::channel('games.{game}', function (User $user, Game $game) {
+    if (! in_array($user->id, [$game->player_one_id, $game->player_two_id])) {
+        return false;
+    }
+
+    return ['id' => $user->id];
+});

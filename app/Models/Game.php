@@ -4,41 +4,37 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Game extends Model
 {
     use HasFactory;
 
     protected $fillable = [
-        'player_x_id',
-        'player_o_id',
+        'player_one_id',
+        'player_two_id',
+        'player_one_credit',
+        'player_two_credit',
+        'match_reward',
+        'match_fee',
         'status',
-        'current_turn_user_id',
+        'state',
         'winner_id',
+        'winning_line',
     ];
 
-    public function playerX()
+    protected $casts = [
+        'status' => 'boolean',
+        'state' => 'json',
+    ];
+
+    public function playerOne(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'player_x_id');
+        return $this->belongsTo(User::class, 'player_one_id');
     }
 
-    public function playerO()
+    public function playerTwo(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'player_o_id');
-    }
-
-    public function currentTurnUser()
-    {
-        return $this->belongsTo(User::class, 'current_turn_user_id');
-    }
-
-    public function winner()
-    {
-        return $this->belongsTo(User::class, 'winner_id');
-    }
-
-    public function moves()
-    {
-        return $this->hasMany(GameMove::class);
+        return $this->belongsTo(User::class, 'player_two_id');
     }
 }
